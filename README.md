@@ -2,10 +2,18 @@
 Compress more. Understand everything.
 AI-Powered Text Compression with Semantic Understanding
 
+# Semantic Text Compressor
+
+## Files
+
+
 ## Screenshots
 
-<img src="interface%201.png" width="45%">
-<img src="interface%202.png" width="45%">
+### Interface 1
+![Interface 1](interface%201.png)
+
+### Interface 2
+![Interface 2](interface%202.png)
 🤔 What is Semantic Text Compressor?
 Semantic Text Compressor is a powerful desktop application that uses Artificial Intelligence to automatically compress long texts while preserving their core meaning. Unlike simple text summarizers that just extract sentences, this tool understands the context and rewrites content in a concise, coherent form.
 
