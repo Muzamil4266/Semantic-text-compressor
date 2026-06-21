@@ -18,8 +18,6 @@ from tkinter import filedialog, messagebox
 import threading
 import time
 import site
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import multiprocessing
 
 sys.path.insert(0, site.getusersitepackages())
 
@@ -149,193 +147,6 @@ def split_into_chunks(text, max_chunk_words=500):
 # AI SUMMARIZATION ENGINE (FLAN-T5)
 # ============================================================
 
-
-# ============================================================
-# QUALITY FILTERS - Clean merged summary without AI
-# ============================================================
-
-class QualityFilters:
-    """
-    5 Python-based filters that clean merged summaries.
-    No AI involved - just rules to remove junk while preserving information.
-    """
-
-    # Common English words for OCR garbage detection
-    COMMON_WORDS = set([
-        "the", "be", "to", "of", "and", "a", "in", "that", "have", "i",
-        "it", "for", "not", "on", "with", "he", "as", "you", "do", "at",
-        "this", "but", "his", "by", "from", "they", "we", "say", "her", "she",
-        "or", "an", "will", "my", "one", "all", "would", "there", "their", "what",
-        "so", "up", "out", "if", "about", "who", "get", "which", "go", "me",
-        "when", "make", "can", "like", "time", "no", "just", "him", "know", "take",
-        "people", "into", "year", "your", "good", "some", "could", "them", "see", "other",
-        "than", "then", "now", "look", "only", "come", "its", "over", "think", "also",
-        "back", "after", "use", "two", "how", "our", "work", "first", "well", "way",
-        "even", "new", "want", "because", "any", "these", "give", "day", "most", "us",
-        "is", "was", "are", "were", "been", "has", "had", "did", "does", "doing",
-        "artificial", "intelligence", "technology", "human", "world", "life", "death", "love",
-        "war", "peace", "history", "future", "past", "present", "time", "space", "universe",
-        "science", "philosophy", "religion", "politics", "economy", "society", "culture",
-        "shakespeare", "anne", "frank", "peter", "van", "daan", "dussel", "mouschi",
-        "writing", "reading", "book", "diary", "journal", "story", "narrative", "character",
-        "plot", "theme", "conflict", "resolution", "climax", "setting", "dialogue",
-        "author", "writer", "novel", "play", "poem", "essay", "article", "paper",
-        "research", "study", "analysis", "argument", "evidence", "conclusion", "thesis",
-        "introduction", "body", "paragraph", "sentence", "word", "phrase", "clause",
-    ])
-
-    @staticmethod
-    def filter_question_sentences(sentences):
-        """Filter 1: Remove sentences that are questions."""
-        cleaned = []
-        for sent in sentences:
-            stripped = sent.strip()
-            # Remove questions (What, Why, How, Who, When, Where, Did, Could, Would, Should, etc.)
-            if stripped.startswith(("What", "Why", "How", "Who", "When", "Where", 
-                                     "Did", "Could", "Would", "Should", "Can", "Will",
-                                     "Is", "Are", "Was", "Were", "Do", "Does", "Have", "Has")):
-                if stripped.endswith("?") or "?" in stripped[:30]:
-                    continue
-            # Also remove sentences starting with lowercase question words (OCR artifacts)
-            if stripped.startswith(("what", "why", "how", "who", "when", "where")):
-                if "?" in stripped[:30]:
-                    continue
-            cleaned.append(sent)
-        return cleaned
-
-    @staticmethod
-    def filter_repeated_words(sentences):
-        """Filter 2: Remove sentences with excessive word repetition."""
-        cleaned = []
-        for sent in sentences:
-            words = re.findall(r'[a-zA-Z]+', sent.lower())
-            if not words:
-                continue
-            word_counts = {}
-            for w in words:
-                word_counts[w] = word_counts.get(w, 0) + 1
-            # Find max repetition ratio
-            max_ratio = max(word_counts.values()) / len(words) if words else 0
-            # Remove if any word appears more than 30% of the time
-            if max_ratio > 0.30:
-                continue
-            cleaned.append(sent)
-        return cleaned
-
-    @staticmethod
-    def filter_duplicate_sentences(sentences, similarity_threshold=0.65):
-        """Filter 3: Remove semantically duplicate sentences. Keep the best one."""
-        cleaned = []
-        for sent in sentences:
-            words = set(re.findall(r'[a-zA-Z]+', sent.lower()))
-            if not words:
-                continue
-            is_duplicate = False
-            for existing in cleaned:
-                existing_words = set(re.findall(r'[a-zA-Z]+', existing.lower()))
-                if not existing_words:
-                    continue
-                intersection = words & existing_words
-                union = words | existing_words
-                if union and len(intersection) / len(union) > similarity_threshold:
-                    # Keep the longer, more complete sentence
-                    if len(sent) < len(existing):
-                        is_duplicate = True
-                        break
-                    else:
-                        # Replace existing with this better version
-                        cleaned.remove(existing)
-                        break
-            if not is_duplicate:
-                cleaned.append(sent)
-        return cleaned
-
-    @staticmethod
-    def filter_incomplete_sentences(sentences):
-        """Filter 4: Remove sentences that don't end with proper punctuation."""
-        cleaned = []
-        for sent in sentences:
-            stripped = sent.strip()
-            if not stripped:
-                continue
-            # Must end with . ! ? or ...
-            if not stripped.endswith((".", "!", "?", "...", "'", '"')):
-                # Exception: allow if it's a quoted sentence ending
-                if stripped.endswith('"') and len(stripped) > 2:
-                    if stripped[-2] in ".!?":
-                        cleaned.append(sent)
-                        continue
-                # Also check if it's a list item or fragment
-                if len(stripped.split()) < 5:  # Very short fragments
-                    continue
-                # Check if it ends mid-thought (no final punctuation in last 20 chars)
-                last_20 = stripped[-20:]
-                if "." not in last_20 and "!" not in last_20 and "?" not in last_20:
-                    continue
-            cleaned.append(sent)
-        return cleaned
-
-    @staticmethod
-    def filter_ocr_garbage(sentences):
-        """Filter 5: Remove sentences with too many unknown/OCR words."""
-        cleaned = []
-        for sent in sentences:
-            words = re.findall(r'[a-zA-Z]+', sent.lower())
-            if not words:
-                continue
-            # Count how many words are NOT in common English vocabulary
-            unknown_count = 0
-            for w in words:
-                if w not in QualityFilters.COMMON_WORDS and len(w) > 2:
-                    # Check if it looks like a typo (repeated letters, missing vowels, etc.)
-                    if re.search(r'(.)\1{2,}', w):  # 3+ repeated letters (e.g., "raceee")
-                        unknown_count += 2
-                    elif len(w) > 8 and not any(v in w for v in 'aeiou'):  # No vowels
-                        unknown_count += 2
-                    elif re.search(r'[0-9]', w) and not w.isdigit():  # Mixed letters/numbers
-                        unknown_count += 1
-
-            # If more than 40% of words are suspicious, remove sentence
-            unknown_ratio = unknown_count / len(words) if words else 0
-            if unknown_ratio > 0.40:
-                continue
-            cleaned.append(sent)
-        return cleaned
-
-    @classmethod
-    def apply_all(cls, text):
-        """Apply all 5 filters in sequence to clean merged summary."""
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-
-        original_count = len(sentences)
-
-        # Filter 1: Remove questions
-        sentences = cls.filter_question_sentences(sentences)
-        f1_count = len(sentences)
-
-        # Filter 2: Remove repeated word spam
-        sentences = cls.filter_repeated_words(sentences)
-        f2_count = len(sentences)
-
-        # Filter 3: Remove duplicates
-        sentences = cls.filter_duplicate_sentences(sentences)
-        f3_count = len(sentences)
-
-        # Filter 4: Remove incomplete sentences
-        sentences = cls.filter_incomplete_sentences(sentences)
-        f4_count = len(sentences)
-
-        # Filter 5: Remove OCR garbage
-        sentences = cls.filter_ocr_garbage(sentences)
-        f5_count = len(sentences)
-
-        # Log filter results
-        filter_log = f"Quality Filters: {original_count} -> {f1_count} -> {f2_count} -> {f3_count} -> {f4_count} -> {f5_count} sentences"
-
-        cleaned_text = " ".join(sentences)
-        return cleaned_text, filter_log
-
-
 class FLAN5Summarizer:
     def __init__(self):
         self.tokenizer = None
@@ -360,22 +171,7 @@ class FLAN5Summarizer:
         if not self.model_loaded:
             self.load_model()
 
-        prompt = f"""
-        Compress the following text to approximately one tenth of its original length.
-
-        Preserve the most important information, concepts, relationships, facts, conclusions, and overall meaning.
-
-        Remove redundancy, repetition, examples, filler content, and less important details.
-
-        Rewrite the content in a concise and coherent form.
-
-        Do not copy long passages directly from the source.
-
-        The result should allow a reader to understand the essential meaning of the original text without reading the full document.
-
-        Text:
-        {text}
-        """
+        prompt = f"summarize: {text}"
 
         inputs = self.tokenizer(
             prompt,
@@ -420,13 +216,10 @@ class FLAN5Summarizer:
         if status_callback:
             status_callback(f"Processing {total_chunks} chunks...")
 
-        chunk_summaries = [None] * total_chunks  # Pre-allocate for thread-safe ordering
+        chunk_summaries = []
         start_time = time.time()
-        completed_count = [0]  # Mutable counter for progress tracking
-        lock = threading.Lock()
 
-        def process_chunk(i, chunk):
-            """Process a single chunk - runs in parallel across CPU cores."""
+        for i, chunk in enumerate(chunks):
             chunk_start = time.time()
 
             if status_callback:
@@ -442,6 +235,7 @@ class FLAN5Summarizer:
                 log_callback(f"[>] Chunk {i+1} target: {chunk_target} words (from {chunk_words} words)")
 
             summary = self.summarize_text(chunk, chunk_target)
+            chunk_summaries.append(summary)
 
             chunk_time = time.time() - chunk_start
             summary_words = len(summary.split())
@@ -449,31 +243,10 @@ class FLAN5Summarizer:
             if log_callback:
                 log_callback(f"[>] Chunk {i+1} done. Extracted {summary_words} words. ({chunk_time:.1f}s)")
 
-            # Thread-safe progress update
-            with lock:
-                completed_count[0] += 1
-                progress = completed_count[0] / total_chunks * 0.7  # 70% for chunking
-                if status_callback:
-                    status_callback(f"Chunk {completed_count[0]}/{total_chunks} complete")
-
-            return i, summary
-
-        # Use ThreadPoolExecutor to process chunks in parallel across all CPU cores
-        max_workers = min(multiprocessing.cpu_count(), total_chunks)
-        if log_callback:
-            log_callback(f"[INFO] Using {max_workers} CPU threads for parallel processing.")
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all chunk tasks
-            future_to_index = {
-                executor.submit(process_chunk, i, chunk): i 
-                for i, chunk in enumerate(chunks)
-            }
-
-            # Collect results as they complete
-            for future in as_completed(future_to_index):
-                i, summary = future.result()
-                chunk_summaries[i] = summary
+            # Progress update
+            progress = (i + 1) / total_chunks * 0.7  # 70% for chunking
+            if status_callback:
+                status_callback(f"Chunk {i+1}/{total_chunks} complete")
 
         combined = " ".join(chunk_summaries)
         combined_words = len(combined.split())
@@ -481,17 +254,33 @@ class FLAN5Summarizer:
         if log_callback:
             log_callback(f"[>] Stage 2: All chunks summarized. Combined: {combined_words} words.")
 
-        # Stage 3: Quality Filters - clean merged summary without second AI pass
-        if status_callback:
-            status_callback("Cleaning with quality filters...")
-        if log_callback:
-            log_callback("[>] Stage 3: Applying quality filters to clean merged summary...")
+        if combined_words > target_words * 1.5 and total_chunks > 1:
+            if status_callback:
+                status_callback("Final polish...")
+            if log_callback:
+                log_callback("[>] Stage 3: Multi-pass compression needed.")
 
-        final_summary, filter_log = QualityFilters.apply_all(combined)
+            final_target = max(target_words, 50)
 
-        if log_callback:
-            log_callback(f"[>] {filter_log}")
-            log_callback("[>] Finalizing output...")
+            if combined_words > 500:
+                sub_chunks = split_into_chunks(combined, max_chunk_words=400)
+                sub_summaries = []
+                for j, sub_chunk in enumerate(sub_chunks):
+                    if log_callback:
+                        log_callback(f"[>] Final polish {j+1}/{len(sub_chunks)}...")
+                    sub_target = max(final_target // len(sub_chunks), 20)
+                    sub_summary = self.summarize_text(sub_chunk, sub_target)
+                    sub_summaries.append(sub_summary)
+                final_summary = " ".join(sub_summaries)
+            else:
+                final_summary = self.summarize_text(combined, final_target)
+
+            if log_callback:
+                log_callback("[>] Finalizing output...")
+        else:
+            if log_callback:
+                log_callback("[>] Stage 3: Single-pass compression sufficient.")
+            final_summary = combined
 
         final_words = len(final_summary.split())
         if final_words > target_words:
